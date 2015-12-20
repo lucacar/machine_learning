@@ -1,0 +1,229 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Luca Caramellino"
+output: html_document
+---
+
+##Synopsis
+Use data from accelerometers wore by volunteer participants executing barbell to identify the quality of the exercise. Some volunteer executed the exercise correctly while other purposedely committed common mistakes. The predictive software must be able to identify the correct exercises with reasonable accuracy.   
+
+##Load libraries
+```{r, warning=FALSE, message=FALSE}
+library(AppliedPredictiveModeling)
+library(caret)
+library(rattle)
+library(rpart.plot)
+library(randomForest)
+library(knitr)
+library(e1071)
+```
+
+##Load Data
+```{r, warning=FALSE}
+training <- read.csv("pml-training.csv", na.strings=c("NA",""), header=TRUE)
+colnames_train <- colnames(training)
+testing <- read.csv("pml-testing.csv", na.strings=c("NA",""), header=TRUE)
+colnames_test <- colnames(testing)
+```
+
+##Filter Data
+
+Data sets are filtered to remove NA values and near zero variables.
+
+```{r, warning=FALSE}
+nonNAs <- function(x) {
+    as.vector(apply(x, 2, function(x) length(which(!is.na(x)))))
+}
+
+colcnts <- nonNAs(training)
+drops <- c()
+for (cnt in 1:length(colcnts)) {
+    if (colcnts[cnt] < nrow(training)) {
+        drops <- c(drops, colnames_train[cnt])
+    }
+}
+
+training <- training[,!(names(training) %in% drops)]
+training <- training[,8:length(colnames(training))]
+
+testing <- testing[,!(names(testing) %in% drops)]
+testing <- testing[,8:length(colnames(testing))]
+```
+
+The training set has __`r nrow(training)`__ samples and __`r ncol(training) - 1`__ potential predictors after filtering. The testing set result instead with __`r nrow(testing)`__ samples and __`r ncol(testing) - 1`__ predictors.
+
+##Check for Covariates
+```{r, warning=FALSE}
+nsv <- nearZeroVar(training, saveMetrics=TRUE)
+nsv
+```
+No covariates was identified so there is no need to further filtering the data set.
+
+## Plot features with highest correlation with classe
+
+```{r, warning=FALSE}
+cor <- abs(sapply(colnames(training[, -ncol(training)]), function(x) cor(as.numeric(training[, x]), as.numeric(training$classe), method = "spearman")))
+
+plot(training[, names(which.max(cor))], training[, names(which.max(cor[-which.max(cor)]))], col = training$classe, pch = 19, cex = 0.1, xlab = names(which.max(cor)), ylab = names(which.max(cor[-which.max(cor)])))
+```
+
+There isn't any strong predictors that correlates with `classe` therteofre linear regression is not suitable. Random forests algorithm may generate more robust predictions for our data and is therefore selected. 
+
+##Algorithm (Random Forest)
+
+### Creating smaller dataset from the original one
+
+The training dataset is divided into smaller sets both to avoid overfitting and to allow predictive algorithm to run faster.
+
+```{r, warning=FALSE}
+set.seed(3)
+ids_small <- createDataPartition(y=training$classe, p=0.25, list=FALSE)
+small1 <- training[ids_small,]
+remainder <- training[-ids_small,]
+
+set.seed(333)
+ids_small <- createDataPartition(y=remainder$classe, p=0.33, list=FALSE)
+small2 <- remainder[ids_small,]
+remainder <- remainder[-ids_small,]
+
+set.seed(333)
+ids_small <- createDataPartition(y=remainder$classe, p=0.5, list=FALSE)
+small3 <- remainder[ids_small,]
+small4 <- remainder[-ids_small,]
+
+set.seed(333)
+inTrain <- createDataPartition(y=small1$classe, p=0.6, list=FALSE)
+small_training1 <- small1[inTrain,]
+small_testing1 <- small1[-inTrain,]
+
+set.seed(333)
+inTrain <- createDataPartition(y=small2$classe, p=0.6, list=FALSE)
+small_training2 <- small2[inTrain,]
+small_testing2 <- small2[-inTrain,]
+
+set.seed(333)
+inTrain <- createDataPartition(y=small3$classe, p=0.6, list=FALSE)
+small_training3 <- small3[inTrain,]
+small_testing3 <- small3[-inTrain,]
+
+set.seed(333)
+inTrain <- createDataPartition(y=small4$classe, p=0.6, list=FALSE)
+small_training4 <- small4[inTrain,]
+small_testing4 <- small4[-inTrain,]
+```
+
+###Random Forest (Test 1)
+
+Selected random forest and run it on the first train data set using cross validation:
+
+```{r, warning=FALSE}
+set.seed(2)
+##Train
+modFit <- train(small_training1$classe ~ ., method="rf", trControl=trainControl(method = "cv", number = 4), data=small_training1)
+print(modFit, digits=3)
+plot(modFit, ylim = c(0.9, 1))
+##Test Set
+predictions <- predict(modFit, newdata=small_testing1)
+cf <- confusionMatrix(predictions, small_testing1$classe)
+print(cf, digits=4)
+##Course Provided Test Set
+print(predict(modFit, newdata=testing))
+
+oos1 <- 1 - cf$overall[1]
+```
+
+Where overall accuracy results __`r cf$overall[1]`__ and out of sample error is __`r 1 - cf$overall[1]`__
+
+###Random Forest (Test 2)
+
+Second run adding reprocessing and cross validation:
+
+```{r, warning=FALSE, message=FALSE}
+set.seed(2)
+##Train
+modFit <- train(small_training1$classe ~ ., method="rf", preProcess=c("center", "scale"), trControl=trainControl(method = "cv", number = 4), data=small_training1)
+print(modFit, digits=3)
+plot(modFit, ylim = c(0.9, 1))
+##Test Set
+predictions <- predict(modFit, newdata=small_testing1)
+cf <- confusionMatrix(predictions, small_testing1$classe)
+print(cf, digits=4)
+##Course Provided Test Set
+print(predict(modFit, newdata=testing))
+
+oos2 <- 1 - cf$overall[1]
+```
+
+Where overall accuracy results __`r cf$overall[1]`__ and out of sample error is __`r 1 - cf$overall[1]`__
+
+###Random Forest (Test 3)
+
+Verify results using the second training dataset:
+
+```{r, warning=FALSE}
+set.seed(2)
+##Train
+modFit <- train(small_training2$classe ~ ., method="rf", preProcess=c("center", "scale"), trControl=trainControl(method = "cv", number = 4), data=small_training2)
+print(modFit, digits=3)
+plot(modFit, ylim = c(0.9, 1))
+##Test Set
+predictions <- predict(modFit, newdata=small_testing2)
+cf <- confusionMatrix(predictions, small_testing2$classe)
+print(cf, digits=4)
+##Course Provided Test Set
+print(predict(modFit, newdata=testing))
+
+oos3 <- 1 - cf$overall[1]
+```
+
+Where overall accuracy results __`r cf$overall[1]`__ and out of sample error is __`r 1 - cf$overall[1]`__
+
+###Random Forest (Test 4)
+
+Last run on the third dataset as ulterior validation:
+
+```{r, warning=FALSE}
+set.seed(2)
+##Train
+modFit <- train(small_training3$classe ~ ., method="rf", preProcess=c("center", "scale"), trControl=trainControl(method = "cv", number = 4), data=small_training3)
+print(modFit, digits=3)
+plot(modFit, ylim = c(0.9, 1))
+##Test Set
+predictions <- predict(modFit, newdata=small_testing3)
+cf <- confusionMatrix(predictions, small_testing3$classe)
+print(cf, digits=4)
+##Course Provided Test Set
+print(predict(modFit, newdata=testing))
+
+oos4 <- 1 - cf$overall[1]
+```
+
+Where overall accuracy results __`r cf$overall[1]`__ and out of sample error is __`r 1 - cf$overall[1]`__
+
+###Random Forest (Test 5)
+
+Final run on fourth dataset using preprocess and cross validation:
+
+```{r, warning=FALSE}
+set.seed(2)
+##Train
+modFit <- train(small_training4$classe ~ ., method="rf", preProcess=c("center", "scale"), trControl=trainControl(method = "cv", number = 4), data=small_training4)
+print(modFit, digits=3)
+plot(modFit, ylim = c(0.9, 1))
+##Test Set
+predictions <- predict(modFit, newdata=small_testing4)
+cf <- confusionMatrix(predictions, small_testing4$classe)
+print(cf, digits=4)
+## Course Provided Test Set
+print(predict(modFit, newdata=testing))
+
+oos5 <- 1 - cf$overall[1]
+```
+
+Where overall accuracy results __`r cf$overall[1]`__ and out of sample error is __`r 1 - cf$overall[1]`__
+
+###Out of Sample Error Rate
+
+####The average of the sample error rates generated by the random forest method using preprocessing and cross validation on the 5 test sets provided a predicted out of sample rate of __`r (oos1 + oos2 + oos3 + oos4 + oos5) / 5`__.
+
+
